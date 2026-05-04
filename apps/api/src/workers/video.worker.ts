@@ -7,6 +7,7 @@ import { selectComposition, renderMedia, ensureBrowser } from '@remotion/rendere
 import { supabaseAdmin } from '../services/supabase'
 import { generateText } from '../lib/llm'
 import { synthesize as synthesizeTts } from '../services/tts'
+import { transcribeWords, type WordTiming } from '../services/captions'
 import {
   makeRedisConnection,
   type VideoJobData,
@@ -355,6 +356,23 @@ async function uploadAudio(
   return data.publicUrl
 }
 
+async function uploadCaptions(
+  captions: WordTiming[],
+  projectId: string,
+  contentItemId: string,
+): Promise<string> {
+  const storagePath = `${projectId}/${contentItemId}_captions.json`
+  const { error } = await supabaseAdmin.storage
+    .from('videos')
+    .upload(storagePath, Buffer.from(JSON.stringify(captions)), {
+      contentType: 'application/json',
+      upsert: true,
+    })
+  if (error) throw new Error(`Captions upload failed: ${error.message}`)
+  const { data } = supabaseAdmin.storage.from('videos').getPublicUrl(storagePath)
+  return data.publicUrl
+}
+
 // ---------------------------------------------------------------------------
 // Step 5: Upload final MP4
 // ---------------------------------------------------------------------------
@@ -420,7 +438,25 @@ async function processVideoJob(job: Job<VideoJobData>) {
     await setStep(content_item_id, 'creating_voiceover')
     const audioBuffer = await generateAudioBuffer(script.narration, tmpDir, template)
     const audioUrl = await uploadAudio(audioBuffer, project_id, content_item_id)
-    await job.updateProgress(45)
+    await job.updateProgress(40)
+
+    // ── Step 2b: Captions (whisper word-level) ───────────────────────────
+    // Soft-fail: if whisper isn't installed or model download fails, render
+    // continues without captions rather than dropping the whole job.
+    await setStep(content_item_id, 'generating_captions')
+    let captions: WordTiming[] = []
+    try {
+      captions = await transcribeWords(audioBuffer)
+      if (captions.length) {
+        await uploadCaptions(captions, project_id, content_item_id)
+        console.log(`[video-worker] captions: ${captions.length} words`)
+      } else {
+        console.warn('[video-worker] captions: whisper returned 0 words')
+      }
+    } catch (err) {
+      console.warn('[video-worker] captions skipped:', err instanceof Error ? err.message : err)
+    }
+    await job.updateProgress(50)
 
     // ── Step 3: Pexels images ────────────────────────────────────────────
     await setStep(content_item_id, 'fetching_footage')
@@ -438,6 +474,7 @@ async function processVideoJob(job: Job<VideoJobData>) {
       brandColor: '#6366f1',
       audioUrl,
       cta: script.cta || 'Follow for more',
+      captions: captions.length ? captions : undefined,
     }
 
     const composition = await selectComposition({
@@ -512,7 +549,10 @@ export const videoWorker = new Worker<VideoJobData>(
   {
     connection: makeRedisConnection(),
     concurrency: 1,
-    lockDuration: 120_000,
+    // Bumped from 120s to handle whisper model first-run download (~150MB
+    // for base.en) plus transcription of up to ~60s narration. Renormal
+    // jobs re-extend the lock automatically.
+    lockDuration: 300_000,
     stalledInterval: 60_000,
   },
 )

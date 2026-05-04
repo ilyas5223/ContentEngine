@@ -16,6 +16,7 @@ import {
 import { fade } from '@remotion/transitions/fade'
 import { slide } from '@remotion/transitions/slide'
 import type { VideoProps } from '../shared/schema'
+import { Captions } from '../components/Captions'
 
 const FPS = 30
 const TITLE_FRAMES = 90
@@ -245,6 +246,7 @@ export const TopicExplainer: React.FC<VideoProps> = ({
   brandColor,
   audioUrl,
   cta,
+  captions,
 }) => {
   const hasImages = images.length > 0
   const imgBullets = content.slice(0, Math.min(images.length, 3))
@@ -296,6 +298,8 @@ export const TopicExplainer: React.FC<VideoProps> = ({
           <Audio src={audioUrl} volume={1} />
         </Sequence>
       ) : null}
+
+      <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
   )
 }

@@ -13,6 +13,7 @@ import {
 } from '@remotion/transitions'
 import { slide } from '@remotion/transitions/slide'
 import type { VideoProps } from '../shared/schema'
+import { Captions } from '../components/Captions'
 
 const FPS = 30
 const TWEET_FRAMES = 120
@@ -166,6 +167,7 @@ export const TwitterThread: React.FC<VideoProps> = ({
   content,
   brandColor,
   audioUrl,
+  captions,
 }) => {
   const tweets = content.length > 0 ? content : [title]
   const author = title.length > 24 ? title.slice(0, 24) + '…' : title
@@ -201,6 +203,8 @@ export const TwitterThread: React.FC<VideoProps> = ({
           <Audio src={audioUrl} volume={1} />
         </Sequence>
       ) : null}
+
+      <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
   )
 }

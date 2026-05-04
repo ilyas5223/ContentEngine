@@ -13,6 +13,7 @@ import {
 } from '@remotion/transitions'
 import { wipe } from '@remotion/transitions/wipe'
 import type { VideoProps } from '../shared/schema'
+import { Captions } from '../components/Captions'
 
 const FPS = 30
 const HOOK_FRAMES = 75
@@ -186,6 +187,7 @@ export const QuickTip: React.FC<VideoProps> = ({
   brandColor,
   cta,
   audioUrl,
+  captions,
 }) => {
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
@@ -218,6 +220,8 @@ export const QuickTip: React.FC<VideoProps> = ({
           <Audio src={audioUrl} volume={1} />
         </Sequence>
       ) : null}
+
+      <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
   )
 }
