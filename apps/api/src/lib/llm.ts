@@ -23,7 +23,18 @@ interface OpenRouterResponse {
   error?: { message: string; code?: number }
 }
 
-export async function generateText(prompt: string): Promise<string> {
+export interface GenerateTextOptions {
+  temperature?: number
+  // When true, requests JSON-mode from the provider. Not all OpenRouter
+  // models honor this — callers must still validate the parsed structure.
+  jsonMode?: boolean
+  system?: string
+}
+
+export async function generateText(
+  prompt: string,
+  options: GenerateTextOptions = {},
+): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) throw new Error('OPENROUTER_API_KEY not set')
 
@@ -31,9 +42,17 @@ export async function generateText(prompt: string): Promise<string> {
     ? process.env.OPENROUTER_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
     : DEFAULT_MODELS
 
+  const messages: Array<{ role: string; content: string }> = []
+  if (options.system) messages.push({ role: 'system', content: options.system })
+  messages.push({ role: 'user', content: prompt })
+
   let lastError: unknown
   for (const model of models) {
     try {
+      const body: Record<string, unknown> = { model, messages }
+      if (options.temperature !== undefined) body.temperature = options.temperature
+      if (options.jsonMode) body.response_format = { type: 'json_object' }
+
       const res = await fetch(OPENROUTER_URL, {
         method: 'POST',
         headers: {
@@ -42,10 +61,7 @@ export async function generateText(prompt: string): Promise<string> {
           'HTTP-Referer': process.env.FRONTEND_URL ?? 'http://localhost:3000',
           'X-Title': 'ContentEngine',
         },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: 'user', content: prompt }],
-        }),
+        body: JSON.stringify(body),
       })
 
       if (!res.ok) {

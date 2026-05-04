@@ -29,6 +29,10 @@ Thumbs.db
 # Sidelined nested git repos
 **/.git.bak
 
+# Claude Code local state
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks/
+
 # Editor
 .vscode
 .idea
