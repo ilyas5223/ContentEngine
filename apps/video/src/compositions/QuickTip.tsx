@@ -10,6 +10,7 @@ import {
 import type { VideoProps } from '../shared/schema'
 import { Captions } from '../components/Captions'
 import { VideoChrome } from '../components/VideoChrome'
+import { AudioBed } from '../audio/AudioBed'
 import { deriveBeatTimings } from '../shared/beatTimings'
 
 const FPS = 30
@@ -234,6 +235,7 @@ export const QuickTip: React.FC<VideoProps> = ({
         </Sequence>
       ) : null}
 
+      <AudioBed template="QuickTip" captions={captions} />
       <VideoChrome brandColor={brandColor} />
       <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
