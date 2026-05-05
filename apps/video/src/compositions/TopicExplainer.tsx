@@ -3,198 +3,181 @@ import {
   AbsoluteFill,
   Audio,
   Img,
+  Loop,
+  OffthreadVideo,
   Sequence,
+  spring,
   useCurrentFrame,
-  interpolate,
-  Easing,
+  useVideoConfig,
 } from 'remotion'
-import {
-  TransitionSeries,
-  linearTiming,
-  springTiming,
-} from '@remotion/transitions'
-import { fade } from '@remotion/transitions/fade'
-import { slide } from '@remotion/transitions/slide'
-import type { VideoProps } from '../shared/schema'
+import type { MediaItem, VideoProps } from '../shared/schema'
 import { Captions } from '../components/Captions'
+import { VideoChrome } from '../components/VideoChrome'
+import { deriveBeatTimings } from '../shared/beatTimings'
 
 const FPS = 30
-const TITLE_FRAMES = 90
-const BULLET_FRAMES = 120
-const IMAGE_FRAMES = 120
-const CTA_FRAMES = 90
-const TRANSITION_FRAMES = 15
+// Halved from Phase A: cuts now 1.5–2.5s instead of 3–4s.
+const TITLE_FRAMES = 45
+const BULLET_FRAMES = 60
+const CTA_FRAMES = 45
+const PAD_FRAMES = 30 // padding after last beat for CTA tail
 
-const TitleCard: React.FC<{ title: string; brandColor: string }> = ({
-  title,
-  brandColor,
+// ── B-roll backdrop ─────────────────────────────────────────────────────────
+// Picks the right element type per media item. Loops video to fill the
+// segment; images get a slow Ken-Burns scale.
+
+const Backdrop: React.FC<{ media?: MediaItem; durationFrames: number }> = ({
+  media,
+  durationFrames,
 }) => {
   const frame = useCurrentFrame()
-  const opacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
-  })
-  const translateY = interpolate(frame, [0, 30], [40, 0], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.16, 1, 0.3, 1),
-  })
-  return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: '#0b0b0f',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 80,
-      }}
-    >
-      <div
+  if (!media) {
+    return (
+      <AbsoluteFill
         style={{
-          opacity,
-          transform: `translateY(${translateY}px)`,
-          textAlign: 'center',
+          background: 'linear-gradient(135deg, #14141c 0%, #1f1f2b 100%)',
         }}
+      />
+    )
+  }
+  if (media.type === 'video') {
+    return (
+      <AbsoluteFill style={{ backgroundColor: '#000' }}>
+        <Loop durationInFrames={Math.max(1, Math.floor((media.duration ?? 5) * FPS))}>
+          <OffthreadVideo
+            src={media.url}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            muted
+          />
+        </Loop>
+        <AbsoluteFill style={{ backgroundColor: 'rgba(0,0,0,0.45)' }} />
+      </AbsoluteFill>
+    )
+  }
+  const scale = 1.05 + (frame / Math.max(1, durationFrames)) * 0.1
+  return (
+    <AbsoluteFill style={{ backgroundColor: '#000' }}>
+      <AbsoluteFill style={{ transform: `scale(${scale})` }}>
+        <Img
+          src={media.url}
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+        />
+      </AbsoluteFill>
+      <AbsoluteFill style={{ backgroundColor: 'rgba(0,0,0,0.45)' }} />
+    </AbsoluteFill>
+  )
+}
+
+// ── Cards ───────────────────────────────────────────────────────────────────
+
+const TitleCard: React.FC<{
+  title: string
+  brandColor: string
+  media?: MediaItem
+  durationFrames: number
+}> = ({ title, brandColor, media, durationFrames }) => {
+  const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 12, stiffness: 120 } })
+  return (
+    <AbsoluteFill>
+      <Backdrop media={media} durationFrames={durationFrames} />
+      <AbsoluteFill
+        style={{ alignItems: 'center', justifyContent: 'center', padding: 80 }}
       >
         <div
           style={{
-            width: 80,
-            height: 8,
-            backgroundColor: brandColor,
-            margin: '0 auto 40px',
-            borderRadius: 4,
-          }}
-        />
-        <h1
-          style={{
-            fontFamily: 'system-ui, -apple-system, sans-serif',
-            fontSize: 110,
-            fontWeight: 800,
-            color: '#fff',
-            lineHeight: 1.1,
-            letterSpacing: -2,
+            opacity: pop,
+            transform: `translateY(${(1 - pop) * 40}px) scale(${0.94 + pop * 0.06})`,
+            textAlign: 'center',
           }}
         >
-          {title}
-        </h1>
-      </div>
+          <div
+            style={{
+              width: 80,
+              height: 8,
+              backgroundColor: brandColor,
+              margin: '0 auto 40px',
+              borderRadius: 4,
+            }}
+          />
+          <h1
+            style={{
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              fontSize: 110,
+              fontWeight: 800,
+              color: '#fff',
+              lineHeight: 1.1,
+              letterSpacing: -2,
+              textShadow: '0 4px 32px rgba(0,0,0,0.6)',
+            }}
+          >
+            {title}
+          </h1>
+        </div>
+      </AbsoluteFill>
     </AbsoluteFill>
   )
 }
 
 const BulletCard: React.FC<{
-  bullets: string[]
+  text: string
+  index: number
   brandColor: string
-}> = ({ bullets, brandColor }) => {
+  media?: MediaItem
+  durationFrames: number
+}> = ({ text, index, brandColor, media, durationFrames }) => {
   const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 12, stiffness: 120 } })
   return (
-    <AbsoluteFill
-      style={{
-        backgroundColor: '#111118',
-        padding: 80,
-        justifyContent: 'center',
-      }}
-    >
-      {bullets.slice(0, 3).map((text, i) => {
-        const start = i * 25
-        const opacity = interpolate(frame, [start, start + 20], [0, 1], {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        })
-        const x = interpolate(frame, [start, start + 25], [-60, 0], {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.bezier(0.16, 1, 0.3, 1),
-        })
-        return (
-          <div
-            key={i}
-            style={{
-              opacity,
-              transform: `translateX(${x}px)`,
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 32,
-              marginBottom: 48,
-            }}
-          >
-            <div
-              style={{
-                minWidth: 64,
-                height: 64,
-                borderRadius: 32,
-                backgroundColor: brandColor,
-                color: '#fff',
-                fontFamily: 'system-ui, sans-serif',
-                fontSize: 32,
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {i + 1}
-            </div>
-            <p
-              style={{
-                fontFamily: 'system-ui, sans-serif',
-                fontSize: 56,
-                fontWeight: 600,
-                color: '#fff',
-                lineHeight: 1.3,
-                flex: 1,
-              }}
-            >
-              {text}
-            </p>
-          </div>
-        )
-      })}
-    </AbsoluteFill>
-  )
-}
-
-const ImageCard: React.FC<{ src: string; caption: string }> = ({
-  src,
-  caption,
-}) => {
-  const frame = useCurrentFrame()
-  const scale = interpolate(frame, [0, IMAGE_FRAMES], [1.05, 1.15], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  })
-  return (
-    <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      <AbsoluteFill style={{ transform: `scale(${scale})` }}>
-        <Img
-          src={src}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-          }}
-        />
-      </AbsoluteFill>
+    <AbsoluteFill>
+      <Backdrop media={media} durationFrames={durationFrames} />
       <AbsoluteFill
-        style={{
-          background:
-            'linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 50%)',
-          justifyContent: 'flex-end',
-          padding: 80,
-        }}
+        style={{ padding: 80, justifyContent: 'center', alignItems: 'flex-start' }}
       >
-        <p
+        <div
           style={{
-            fontFamily: 'system-ui, sans-serif',
-            fontSize: 52,
-            fontWeight: 700,
-            color: '#fff',
-            lineHeight: 1.3,
+            opacity: pop,
+            transform: `translateX(${(1 - pop) * -60}px)`,
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 32,
+            maxWidth: 920,
           }}
         >
-          {caption}
-        </p>
+          <div
+            style={{
+              minWidth: 80,
+              height: 80,
+              borderRadius: 40,
+              backgroundColor: brandColor,
+              color: '#fff',
+              fontFamily: 'system-ui, sans-serif',
+              fontSize: 40,
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+            }}
+          >
+            {index + 1}
+          </div>
+          <p
+            style={{
+              fontFamily: 'system-ui, sans-serif',
+              fontSize: 64,
+              fontWeight: 800,
+              color: '#fff',
+              lineHeight: 1.2,
+              letterSpacing: -1,
+              textShadow: '0 4px 16px rgba(0,0,0,0.7)',
+            }}
+          >
+            {text}
+          </p>
+        </div>
       </AbsoluteFill>
     </AbsoluteFill>
   )
@@ -205,15 +188,8 @@ const CTACard: React.FC<{ cta: string; brandColor: string }> = ({
   brandColor,
 }) => {
   const frame = useCurrentFrame()
-  const scale = interpolate(frame, [0, 30], [0.8, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.34, 1.56, 0.64, 1),
-  })
-  const opacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  })
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 10, stiffness: 140 } })
   return (
     <AbsoluteFill
       style={{
@@ -222,7 +198,13 @@ const CTACard: React.FC<{ cta: string; brandColor: string }> = ({
         justifyContent: 'center',
       }}
     >
-      <div style={{ opacity, transform: `scale(${scale})`, textAlign: 'center' }}>
+      <div
+        style={{
+          opacity: pop,
+          transform: `scale(${0.8 + pop * 0.2})`,
+          textAlign: 'center',
+        }}
+      >
         <h2
           style={{
             fontFamily: 'system-ui, sans-serif',
@@ -239,6 +221,8 @@ const CTACard: React.FC<{ cta: string; brandColor: string }> = ({
   )
 }
 
+// ── Main composition ────────────────────────────────────────────────────────
+
 export const TopicExplainer: React.FC<VideoProps> = ({
   title,
   content,
@@ -246,52 +230,83 @@ export const TopicExplainer: React.FC<VideoProps> = ({
   brandColor,
   audioUrl,
   cta,
+  beats,
   captions,
+  mediaItems,
 }) => {
-  const hasImages = images.length > 0
-  const imgBullets = content.slice(0, Math.min(images.length, 3))
+  const { fps, durationInFrames } = useVideoConfig()
+  const timings = deriveBeatTimings(beats, captions, fps, durationInFrames)
+
+  // Build a unified media pool: prefer typed mediaItems (videos+images),
+  // fallback to legacy images-only prop.
+  const pool: MediaItem[] =
+    mediaItems && mediaItems.length
+      ? mediaItems
+      : images.map((url) => ({ type: 'image' as const, url }))
+
+  // Bullet text source: prefer beats[].onScreen (kinetic chyrons), fallback to
+  // legacy `content` array.
+  const bulletTexts = beats?.points.map((p) => p.onScreen) ?? content
+  const titleText = beats?.hook.onScreen ?? title
+  const ctaText = beats?.cta.onScreen ?? cta
+
+  // Compute per-segment durations. With beat timings, each segment's frames
+  // come from whisper-derived spans, snapping cuts to actual narration. Without
+  // timings, fall back to fixed frame counts.
+  const titleFrames = timings
+    ? Math.max(15, timings.hook.endFrame - timings.hook.startFrame)
+    : TITLE_FRAMES
+  const bulletFrames = bulletTexts.map((_, i) => {
+    if (timings && timings.points[i]) {
+      const t = timings.points[i]!
+      return Math.max(20, t.endFrame - t.startFrame)
+    }
+    return BULLET_FRAMES
+  })
+  const ctaFrames = timings
+    ? Math.max(30, timings.cta.endFrame - timings.cta.startFrame + PAD_FRAMES)
+    : CTA_FRAMES
+
+  let cursor = 0
+  const titleStart = cursor
+  cursor += titleFrames
+  const bulletStarts: number[] = []
+  for (const f of bulletFrames) {
+    bulletStarts.push(cursor)
+    cursor += f
+  }
+  const ctaStart = cursor
 
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      <TransitionSeries>
-        <TransitionSeries.Sequence durationInFrames={TITLE_FRAMES}>
-          <TitleCard title={title} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
-
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: TRANSITION_FRAMES })}
+      <Sequence from={titleStart} durationInFrames={titleFrames}>
+        <TitleCard
+          title={titleText}
+          brandColor={brandColor}
+          media={pool[0]}
+          durationFrames={titleFrames}
         />
+      </Sequence>
 
-        <TransitionSeries.Sequence durationInFrames={BULLET_FRAMES}>
-          <BulletCard bullets={content} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
+      {bulletTexts.map((text, i) => (
+        <Sequence
+          key={i}
+          from={bulletStarts[i]!}
+          durationInFrames={bulletFrames[i]!}
+        >
+          <BulletCard
+            text={text}
+            index={i}
+            brandColor={brandColor}
+            media={pool[(i + 1) % Math.max(1, pool.length)]}
+            durationFrames={bulletFrames[i]!}
+          />
+        </Sequence>
+      ))}
 
-        {hasImages &&
-          imgBullets.map((caption, i) => (
-            <React.Fragment key={i}>
-              <TransitionSeries.Transition
-                presentation={slide({ direction: 'from-right' })}
-                timing={springTiming({
-                  config: { damping: 200 },
-                  durationInFrames: 20,
-                })}
-              />
-              <TransitionSeries.Sequence durationInFrames={IMAGE_FRAMES}>
-                <ImageCard src={images[i]!} caption={caption} />
-              </TransitionSeries.Sequence>
-            </React.Fragment>
-          ))}
-
-        <TransitionSeries.Transition
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: TRANSITION_FRAMES })}
-        />
-
-        <TransitionSeries.Sequence durationInFrames={CTA_FRAMES}>
-          <CTACard cta={cta} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
-      </TransitionSeries>
+      <Sequence from={ctaStart} durationInFrames={ctaFrames}>
+        <CTACard cta={ctaText} brandColor={brandColor} />
+      </Sequence>
 
       {audioUrl ? (
         <Sequence from={0}>
@@ -299,6 +314,7 @@ export const TopicExplainer: React.FC<VideoProps> = ({
         </Sequence>
       ) : null}
 
+      <VideoChrome brandColor={brandColor} />
       <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
   )
@@ -309,16 +325,23 @@ export const calculateTopicExplainerMetadata = ({
 }: {
   props: VideoProps
 }) => {
-  const imgCount = Math.min(props.images.length, 3)
-  const total =
-    TITLE_FRAMES +
-    BULLET_FRAMES +
-    imgCount * IMAGE_FRAMES +
-    CTA_FRAMES -
-    TRANSITION_FRAMES * (2 + imgCount)
+  const fps = FPS
+  // If captions are present, total duration = last caption end + CTA pad.
+  if (props.captions?.length) {
+    const last = props.captions[props.captions.length - 1]!
+    return {
+      durationInFrames: Math.ceil(last.end * fps) + CTA_FRAMES + PAD_FRAMES,
+      fps,
+      width: 1080,
+      height: 1920,
+    }
+  }
+  // Fallback: estimate from beats word count or legacy bullets.
+  const points = props.beats?.points.length ?? Math.min(props.content.length, 4)
+  const total = TITLE_FRAMES + points * BULLET_FRAMES + CTA_FRAMES
   return {
-    durationInFrames: Math.max(total, FPS * 10),
-    fps: FPS,
+    durationInFrames: Math.max(total, fps * 12),
+    fps,
     width: 1080,
     height: 1920,
   }

@@ -3,39 +3,29 @@ import {
   AbsoluteFill,
   Audio,
   Sequence,
+  spring,
   useCurrentFrame,
-  interpolate,
-  Easing,
+  useVideoConfig,
 } from 'remotion'
-import {
-  TransitionSeries,
-  linearTiming,
-} from '@remotion/transitions'
-import { wipe } from '@remotion/transitions/wipe'
 import type { VideoProps } from '../shared/schema'
 import { Captions } from '../components/Captions'
+import { VideoChrome } from '../components/VideoChrome'
+import { deriveBeatTimings } from '../shared/beatTimings'
 
 const FPS = 30
-const HOOK_FRAMES = 75
-const CONTENT_FRAMES = 135
-const CTA_FRAMES = 60
-const TRANSITION_FRAMES = 12
+// Halved from Phase A. Quick tips need to feel snappy.
+const HOOK_FRAMES = 38
+const POINT_FRAMES = 50
+const CTA_FRAMES = 30
+const PAD_FRAMES = 20
 
 const HookCard: React.FC<{ title: string; brandColor: string }> = ({
   title,
   brandColor,
 }) => {
   const frame = useCurrentFrame()
-  const scale = interpolate(frame, [0, 25], [0.85, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.bezier(0.34, 1.56, 0.64, 1),
-  })
-  const opacity = interpolate(frame, [0, 20], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  })
-
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 12, stiffness: 120 } })
   return (
     <AbsoluteFill
       style={{
@@ -47,8 +37,8 @@ const HookCard: React.FC<{ title: string; brandColor: string }> = ({
     >
       <div
         style={{
-          opacity,
-          transform: `scale(${scale})`,
+          opacity: pop,
+          transform: `scale(${0.85 + pop * 0.15})`,
           textAlign: 'center',
         }}
       >
@@ -90,11 +80,14 @@ const HookCard: React.FC<{ title: string; brandColor: string }> = ({
   )
 }
 
-const ContentCard: React.FC<{
-  lines: string[]
+const PointCard: React.FC<{
+  text: string
+  index: number
   brandColor: string
-}> = ({ lines, brandColor }) => {
+}> = ({ text, index, brandColor }) => {
   const frame = useCurrentFrame()
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 12, stiffness: 120 } })
   return (
     <AbsoluteFill
       style={{
@@ -104,44 +97,40 @@ const ContentCard: React.FC<{
         justifyContent: 'center',
       }}
     >
-      <div style={{ width: '100%', maxWidth: 900 }}>
-        {lines.slice(0, 3).map((line, i) => {
-          const start = i * 20
-          const opacity = interpolate(frame, [start, start + 18], [0, 1], {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.bezier(0.16, 1, 0.3, 1),
-          })
-          const y = interpolate(frame, [start, start + 25], [30, 0], {
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-            easing: Easing.bezier(0.16, 1, 0.3, 1),
-          })
-          return (
-            <div
-              key={i}
-              style={{
-                opacity,
-                transform: `translateY(${y}px)`,
-                marginBottom: 40,
-                borderLeft: `8px solid ${brandColor}`,
-                paddingLeft: 32,
-              }}
-            >
-              <p
-                style={{
-                  fontFamily: 'system-ui, sans-serif',
-                  fontSize: 56,
-                  fontWeight: 700,
-                  color: '#0b0b0f',
-                  lineHeight: 1.3,
-                }}
-              >
-                {line}
-              </p>
-            </div>
-          )
-        })}
+      <div
+        style={{
+          opacity: pop,
+          transform: `translateY(${(1 - pop) * 40}px)`,
+          width: '100%',
+          maxWidth: 900,
+          borderLeft: `8px solid ${brandColor}`,
+          paddingLeft: 32,
+        }}
+      >
+        <p
+          style={{
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 40,
+            fontWeight: 700,
+            color: brandColor,
+            marginBottom: 16,
+            letterSpacing: 2,
+          }}
+        >
+          STEP {index + 1}
+        </p>
+        <p
+          style={{
+            fontFamily: 'system-ui, sans-serif',
+            fontSize: 64,
+            fontWeight: 800,
+            color: '#0b0b0f',
+            lineHeight: 1.2,
+            letterSpacing: -1,
+          }}
+        >
+          {text}
+        </p>
       </div>
     </AbsoluteFill>
   )
@@ -152,10 +141,8 @@ const CTACard: React.FC<{ cta: string; brandColor: string }> = ({
   brandColor,
 }) => {
   const frame = useCurrentFrame()
-  const opacity = interpolate(frame, [0, 15], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  })
+  const { fps } = useVideoConfig()
+  const pop = spring({ frame, fps, config: { damping: 10, stiffness: 140 } })
   return (
     <AbsoluteFill
       style={{
@@ -164,7 +151,7 @@ const CTACard: React.FC<{ cta: string; brandColor: string }> = ({
         justifyContent: 'center',
       }}
     >
-      <div style={{ opacity, textAlign: 'center' }}>
+      <div style={{ opacity: pop, transform: `scale(${0.85 + pop * 0.15})`, textAlign: 'center' }}>
         <h2
           style={{
             fontFamily: 'system-ui, sans-serif',
@@ -187,33 +174,59 @@ export const QuickTip: React.FC<VideoProps> = ({
   brandColor,
   cta,
   audioUrl,
+  beats,
   captions,
 }) => {
+  const { fps, durationInFrames } = useVideoConfig()
+  const timings = deriveBeatTimings(beats, captions, fps, durationInFrames)
+
+  const hookText = beats?.hook.onScreen ?? title
+  const points = beats?.points.map((p) => p.onScreen) ?? content
+  const ctaText = beats?.cta.onScreen ?? cta
+
+  const hookFrames = timings
+    ? Math.max(20, timings.hook.endFrame - timings.hook.startFrame)
+    : HOOK_FRAMES
+  const pointFrames = points.map((_, i) => {
+    if (timings && timings.points[i]) {
+      const t = timings.points[i]!
+      return Math.max(20, t.endFrame - t.startFrame)
+    }
+    return POINT_FRAMES
+  })
+  const ctaFrames = timings
+    ? Math.max(25, timings.cta.endFrame - timings.cta.startFrame + PAD_FRAMES)
+    : CTA_FRAMES
+
+  let cursor = 0
+  const hookStart = cursor
+  cursor += hookFrames
+  const pointStarts: number[] = []
+  for (const f of pointFrames) {
+    pointStarts.push(cursor)
+    cursor += f
+  }
+  const ctaStart = cursor
+
   return (
     <AbsoluteFill style={{ backgroundColor: '#000' }}>
-      <TransitionSeries>
-        <TransitionSeries.Sequence durationInFrames={HOOK_FRAMES}>
-          <HookCard title={title} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
+      <Sequence from={hookStart} durationInFrames={hookFrames}>
+        <HookCard title={hookText} brandColor={brandColor} />
+      </Sequence>
 
-        <TransitionSeries.Transition
-          presentation={wipe({ direction: 'from-left' })}
-          timing={linearTiming({ durationInFrames: TRANSITION_FRAMES })}
-        />
+      {points.map((text, i) => (
+        <Sequence
+          key={i}
+          from={pointStarts[i]!}
+          durationInFrames={pointFrames[i]!}
+        >
+          <PointCard text={text} index={i} brandColor={brandColor} />
+        </Sequence>
+      ))}
 
-        <TransitionSeries.Sequence durationInFrames={CONTENT_FRAMES}>
-          <ContentCard lines={content} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
-
-        <TransitionSeries.Transition
-          presentation={wipe({ direction: 'from-right' })}
-          timing={linearTiming({ durationInFrames: TRANSITION_FRAMES })}
-        />
-
-        <TransitionSeries.Sequence durationInFrames={CTA_FRAMES}>
-          <CTACard cta={cta} brandColor={brandColor} />
-        </TransitionSeries.Sequence>
-      </TransitionSeries>
+      <Sequence from={ctaStart} durationInFrames={ctaFrames}>
+        <CTACard cta={ctaText} brandColor={brandColor} />
+      </Sequence>
 
       {audioUrl ? (
         <Sequence from={0}>
@@ -221,17 +234,28 @@ export const QuickTip: React.FC<VideoProps> = ({
         </Sequence>
       ) : null}
 
+      <VideoChrome brandColor={brandColor} />
       <Captions captions={captions} brandColor={brandColor} />
     </AbsoluteFill>
   )
 }
 
-export const calculateQuickTipMetadata = () => {
-  const total =
-    HOOK_FRAMES + CONTENT_FRAMES + CTA_FRAMES - TRANSITION_FRAMES * 2
+export const calculateQuickTipMetadata = ({ props }: { props: VideoProps }) => {
+  const fps = FPS
+  if (props.captions?.length) {
+    const last = props.captions[props.captions.length - 1]!
+    return {
+      durationInFrames: Math.ceil(last.end * fps) + CTA_FRAMES + PAD_FRAMES,
+      fps,
+      width: 1080,
+      height: 1920,
+    }
+  }
+  const pts = props.beats?.points.length ?? Math.min(props.content.length, 3)
+  const total = HOOK_FRAMES + pts * POINT_FRAMES + CTA_FRAMES
   return {
-    durationInFrames: total,
-    fps: FPS,
+    durationInFrames: Math.max(total, fps * 8),
+    fps,
     width: 1080,
     height: 1920,
   }
