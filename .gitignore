@@ -32,6 +32,10 @@ Thumbs.db
 # Claude Code local state
 .claude/scheduled_tasks.lock
 .claude/scheduled_tasks/
+.claude/settings.local.json
+
+# Music assets (large binaries, added manually per environment)
+apps/video/public/music/*.mp3
 
 # Editor
 .vscode

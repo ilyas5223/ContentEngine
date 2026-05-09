@@ -49,6 +49,25 @@ async function mp3ToWav16k(mp3: Buffer, dir: string): Promise<string> {
 // nodejs-whisper writes a sidecar .json (with --output_json + --word_timestamps)
 // formatted as { transcription: [{ from, to, text, words?: [...] }] }.
 // The exact shape varies by version, so we walk both common layouts.
+// Whisper.cpp-style timestamps look like "00:00:01,440" or numeric seconds/ms.
+// Returns seconds, or null if unparseable.
+function toSeconds(v: unknown): number | null {
+  if (typeof v === 'number' && isFinite(v)) {
+    // Heuristic: values >= 1000 are almost certainly milliseconds.
+    return v >= 1000 ? v / 1000 : v
+  }
+  if (typeof v === 'string') {
+    const m = v.match(/^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})$/)
+    if (m) {
+      const [, h, mn, s, ms] = m
+      return Number(h) * 3600 + Number(mn) * 60 + Number(s) + Number(ms.padEnd(3, '0')) / 1000
+    }
+    const n = Number(v)
+    if (!isNaN(n)) return n >= 1000 ? n / 1000 : n
+  }
+  return null
+}
+
 function parseWhisperJson(json: any): WordTiming[] {
   const out: WordTiming[] = []
   const segments = Array.isArray(json?.transcription)
@@ -61,22 +80,17 @@ function parseWhisperJson(json: any): WordTiming[] {
     if (Array.isArray(words) && words.length) {
       for (const w of words) {
         const word = (w.word ?? w.text ?? '').toString().trim()
-        const start = typeof w.start === 'number' ? w.start
-          : typeof w.from === 'number' ? w.from / 1000
-          : null
-        const end = typeof w.end === 'number' ? w.end
-          : typeof w.to === 'number' ? w.to / 1000
-          : null
+        const start = toSeconds(w.start ?? w.from ?? w.offsets?.from)
+        const end = toSeconds(w.end ?? w.to ?? w.offsets?.to)
         if (word && start !== null && end !== null) out.push({ word, start, end })
       }
-    } else if (seg?.text) {
-      // Fallback: split segment text evenly across [from, to] in ms.
-      const text = String(seg.text).trim()
+    } else if (seg?.text || seg?.speech) {
+      const text = String(seg.text ?? seg.speech).trim()
       const tokens = text.split(/\s+/).filter(Boolean)
-      const start = typeof seg.from === 'number' ? seg.from / 1000 : seg.start ?? 0
-      const end = typeof seg.to === 'number' ? seg.to / 1000 : seg.end ?? start
+      const start = toSeconds(seg.from ?? seg.start ?? seg.timestamps?.from ?? seg.offsets?.from) ?? 0
+      const end = toSeconds(seg.to ?? seg.end ?? seg.timestamps?.to ?? seg.offsets?.to) ?? start
       const dur = Math.max(0.1, end - start)
-      const step = dur / tokens.length
+      const step = dur / Math.max(1, tokens.length)
       tokens.forEach((tok: string, i: number) => {
         out.push({ word: tok, start: start + i * step, end: start + (i + 1) * step })
       })
@@ -87,6 +101,10 @@ function parseWhisperJson(json: any): WordTiming[] {
 
 // Cache the whisper module + model-download bootstrap once per process.
 let whisperReady: Promise<any> | null = null
+// Once whisper has failed (e.g. cmake not on PATH on Windows), don't keep
+// retrying — every attempt re-downloads the model and re-runs cmake which
+// burns 60+ seconds per job.
+let whisperUnavailable = false
 function getWhisper(): Promise<any> {
   if (whisperReady) return whisperReady
   whisperReady = (async () => {
@@ -97,6 +115,8 @@ function getWhisper(): Promise<any> {
 }
 
 export async function transcribeWords(audio: Buffer): Promise<WordTiming[]> {
+  if (process.env.DISABLE_WHISPER === '1') return []
+  if (whisperUnavailable) return []
   const id = crypto.randomBytes(6).toString('hex')
   const dir = path.join(os.tmpdir(), `ce_whisper_${id}`)
   fs.mkdirSync(dir, { recursive: true })
@@ -130,7 +150,19 @@ export async function transcribeWords(audio: Buffer): Promise<WordTiming[]> {
       throw new Error(`whisper output JSON missing: ${jsonPath}`)
     }
     const json = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'))
-    return parseWhisperJson(json)
+    const words = parseWhisperJson(json)
+    if (words.length === 0) {
+      const segments = Array.isArray(json?.transcription) ? json.transcription : json?.segments
+      console.warn('[captions] parser returned 0 words. sample:', JSON.stringify(segments?.[0] ?? json).slice(0, 400))
+    }
+    return words
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/cmake|build|compile|ENOENT|executable|not found|whisper-cli/i.test(msg)) {
+      whisperUnavailable = true
+      console.warn('[captions] whisper disabled for this process — install cmake to enable')
+    }
+    throw err
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
   }

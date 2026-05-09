@@ -23,9 +23,26 @@ export interface SfxClip {
 // mood (deterministic across renders). Add 3–5 per mood for variety once
 // you start randomising selection.
 export const MUSIC_BY_MOOD: Record<Mood, MusicTrack[]> = {
-  upbeat: [],
-  chill: [],
-  dramatic: [],
+  upbeat: [
+    { src: 'music/upbeat-pulse.mp3' },
+    { src: 'music/upbeat-drive.mp3' },
+    { src: 'music/upbeat-motivation.mp3' },
+    { src: 'music/upbeat-action.mp3' },
+    { src: 'music/upbeat-abstract.mp3' },
+    { src: 'music/corporate-happy.mp3' },
+    { src: 'music/corporate-positive.mp3' },
+    { src: 'music/corporate-success.mp3' },
+    { src: 'music/chill-pop.mp3' },
+  ],
+  chill: [
+    { src: 'music/lofi-chill.mp3' },
+    { src: 'music/lofi-romance.mp3' },
+    { src: 'music/lofi-romantic.mp3' },
+    { src: 'music/ambient-inspiring.mp3' },
+  ],
+  dramatic: [
+    { src: 'music/ambient-suspense.mp3' },
+  ],
 }
 
 // SFX library. Trigger via name from compositions when needed.

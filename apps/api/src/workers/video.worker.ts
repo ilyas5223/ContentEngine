@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import { Worker, type Job } from 'bullmq'
 import { bundle } from '@remotion/bundler'
-import { selectComposition, renderMedia, ensureBrowser } from '@remotion/renderer'
+import { selectComposition, renderMedia, ensureBrowser, openBrowser } from '@remotion/renderer'
 import { supabaseAdmin } from '../services/supabase'
 import { generateText } from '../lib/llm'
 import { synthesize as synthesizeTts } from '../services/tts'
@@ -13,6 +13,8 @@ import {
   type VideoJobData,
   type VideoTemplate,
 } from '../services/queue'
+
+type HeadlessBrowser = Awaited<ReturnType<typeof openBrowser>>
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,12 +96,41 @@ async function getServeUrl(): Promise<string> {
 }
 
 // Warm up Chrome + Remotion bundle before the worker accepts jobs.
-// Without this, the first job dequeues while Chrome is still downloading
-// and webpack bundling blocks the event loop, starving BullMQ's lock-renewal
-// timer and stalling the job.
+// Reuse a single browser instance across jobs — Remotion's per-job browser
+// launch has a hardcoded 25s connect timeout that Windows + Chromium cold
+// starts routinely blow past. Pay the launch cost once at boot.
+let sharedBrowser: HeadlessBrowser | null = null
+
+// Bundled Chromium silently fails to launch on some Windows configs (Defender
+// quarantine, corrupted download, etc — manifests as empty stdout/stderr +
+// 25s connect timeout). Point at system Chrome instead when available.
+function findSystemChrome(): string | null {
+  if (process.env.CHROME_EXECUTABLE) return process.env.CHROME_EXECUTABLE
+  const candidates = [
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return null
+}
+
+async function getBrowser(): Promise<HeadlessBrowser> {
+  if (sharedBrowser) return sharedBrowser
+  // chrome-for-testing is an isolated Chrome install Remotion manages itself.
+  // Avoids the singleton-profile lock that empty-stderr-kills a system Chrome
+  // launch when the user already has Chrome open.
+  sharedBrowser = await openBrowser('chrome', { chromeMode: 'chrome-for-testing' })
+  return sharedBrowser
+}
+
 const warmup = (async () => {
-  await ensureBrowser()
+  await ensureBrowser({ chromeMode: 'chrome-for-testing' })
   await getServeUrl()
+  await getBrowser()
   console.log('[video-worker] warmup complete')
 })().catch((err) => {
   console.warn('[video-worker] warmup failed; first job will retry:', err)
@@ -224,9 +255,11 @@ function tooSimilar(narration: string, onScreen: string): boolean {
   const a = tokens(narration)
   const b = tokens(onScreen)
   if (b.size === 0) return false
+  // Short labels (1-3 meaningful tokens) are expected to echo narration keywords.
+  if (b.size < 4) return false
   let shared = 0
   for (const w of b) if (a.has(w)) shared++
-  return shared / b.size >= 0.7
+  return shared / b.size >= 0.85
 }
 
 function validateBeats(beats: Beats, template: VideoTemplate): string | null {
@@ -593,12 +626,14 @@ async function processVideoJob(job: Job<VideoJobData>) {
       mediaItems: mediaItems.length ? mediaItems : undefined,
     }
 
+    const browser = await getBrowser()
+
     const composition = await selectComposition({
       serveUrl,
       id: template,
       inputProps,
       timeoutInMilliseconds: 90_000,
-      chromiumOptions: { gl: 'angle' },
+      puppeteerInstance: browser,
     })
 
     const outputPath = path.join(tmpDir, 'output.mp4')
@@ -610,7 +645,7 @@ async function processVideoJob(job: Job<VideoJobData>) {
       outputLocation: outputPath,
       inputProps,
       timeoutInMilliseconds: 90_000,
-      chromiumOptions: { gl: 'angle' },
+      puppeteerInstance: browser,
       onProgress: ({ progress }) => {
         const pct = Math.min(90, 55 + Math.floor(progress * 35))
         job.updateProgress(pct).catch(() => {})
@@ -665,11 +700,11 @@ export const videoWorker = new Worker<VideoJobData>(
   {
     connection: makeRedisConnection(),
     concurrency: 1,
-    // Bumped from 120s to handle whisper model first-run download (~150MB
-    // for base.en) plus transcription of up to ~60s narration. Renormal
-    // jobs re-extend the lock automatically.
-    lockDuration: 300_000,
-    stalledInterval: 60_000,
+    // First-run cost is dominated by one-time downloads: Kokoro 82M ONNX,
+    // whisper model + cmake build, Remotion Chromium. 15min buys headroom
+    // even on cold starts; the lock auto-extends every 30s while alive.
+    lockDuration: 900_000,
+    stalledInterval: 120_000,
   },
 )
 
@@ -688,6 +723,9 @@ videoWorker.on('error', (err) => {
 const shutdown = async () => {
   try {
     await videoWorker.close()
+  } catch {}
+  try {
+    await sharedBrowser?.close({ silent: true })
   } catch {}
 }
 process.once('SIGTERM', shutdown)
