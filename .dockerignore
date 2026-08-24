@@ -1,0 +1,33 @@
+# Never ship host node_modules — the image installs its own Linux binaries.
+**/node_modules
+
+# Windows whisper build + the 148 MB model; setup:whisper refetches the
+# Linux archive during the image build.
+apps/api/vendor
+apps/api/out
+
+# Build outputs — regenerated inside the image.
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# The API image does not serve the dashboard. Its package.json is still
+# copied explicitly so pnpm can validate the lockfile.
+apps/web/src
+apps/web/public
+apps/web/next.config.*
+apps/web/tailwind.config.*
+apps/web/postcss.config.*
+apps/web/tsconfig.json
+
+.git
+.github
+.claude
+.agents
+skills
+supabase
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log

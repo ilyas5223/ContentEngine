@@ -35,6 +35,29 @@ pnpm --filter @contentengine/api dev
 pnpm --filter @contentengine/api render --topic "why most diets fail" --template QuickTip
 ```
 
+## Docker (apps/api)
+
+Build from the repo root — the image needs the workspace manifests and
+`apps/video`'s source, because Remotion bundles the compositions from
+TypeScript at render time:
+
+```bash
+docker build -f apps/api/Dockerfile -t contentengine-api .
+docker run --rm -p 4000:4000 --env-file apps/api/.env contentengine-api
+```
+
+Chrome (`chrome-for-testing`, matching `services/render.ts`) and the whisper
+CLI + caption model are baked in at build time, so a cold container renders
+without downloading anything. The install step filters to
+`@contentengine/api...`, which pulls in `video` and `shared` but leaves the
+dashboard's Next.js toolchain out of the image.
+
+`.dockerignore` excludes `apps/api/vendor` — the host's whisper build is
+platform-specific, and `setup:whisper` refetches the Linux archive during the
+build. Music `.mp3`s are gitignored and therefore absent from the image;
+`resolveMusicTrack()` intersects the manifest with what actually shipped, so
+renders come out silent rather than broken.
+
 ## Architecture
 
 **Auth**: Supabase Auth with SSR. Middleware in `apps/web/src/middleware.ts` protects all routes except `/login`, `/signup`, `/auth/callback`. Google OAuth redirects to `/auth/callback` (PKCE exchange). Logout is a POST form to `/logout`.
