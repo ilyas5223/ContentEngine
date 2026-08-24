@@ -14,8 +14,12 @@ FROM node:22-bookworm-slim
 
 # Chrome Headless Shell's shared libraries — the list Remotion documents for
 # Debian. Without these Chrome exits immediately and renders hang.
+#
+# libgomp1 is not on that list: it is whisper.cpp's, whose prebuilt binary is
+# built with OpenMP and will not start without it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
+      libgomp1 \
       libnss3 \
       libdbus-1-3 \
       libatk1.0-0 \
