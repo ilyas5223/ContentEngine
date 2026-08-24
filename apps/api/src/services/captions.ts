@@ -33,15 +33,35 @@ function resolveFfmpeg(): string {
   return 'ffmpeg'
 }
 
+// Every upstream archive extracts its binaries into a subdirectory, and the
+// name differs per platform — `Release/` in the Windows zip and
+// `whisper-bin-ubuntu-x64/` in the Linux tarball. Scan one level down instead
+// of hardcoding either, so any extraction layout resolves.
+function candidateBinDirs(): string[] {
+  const dirs = [VENDOR_DIR]
+  try {
+    for (const entry of fs.readdirSync(VENDOR_DIR, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.push(path.join(VENDOR_DIR, entry.name))
+    }
+  } catch {}
+  // Where a cmake build from source puts them.
+  dirs.push(path.join(VENDOR_DIR, 'build', 'bin'))
+  return dirs
+}
+
 function resolveWhisperBin(): string | null {
   const override = process.env.WHISPER_BIN
   if (override && fs.existsSync(override)) return override
   const exe = process.platform === 'win32' ? '.exe' : ''
-  // Upstream renamed the CLI from `main` to `whisper-cli`; release zips in
-  // circulation ship one or the other.
+  const dirs = candidateBinDirs()
+  // Upstream renamed the CLI from `main` to `whisper-cli`; release archives in
+  // circulation ship one or the other, sometimes both. Prefer the current name
+  // everywhere before falling back to the legacy one.
   for (const name of ['whisper-cli', 'main']) {
-    const candidate = path.join(VENDOR_DIR, name + exe)
-    if (fs.existsSync(candidate)) return candidate
+    for (const dir of dirs) {
+      const candidate = path.join(dir, name + exe)
+      if (fs.existsSync(candidate)) return candidate
+    }
   }
   return null
 }
@@ -133,6 +153,14 @@ export async function transcribeWords(audio: Buffer): Promise<WordTiming[]> {
     const wavPath = await mp3ToWav16k(audio, dir)
     const outBase = path.join(dir, 'out')
 
+    // The Linux tarball ships libwhisper/libggml as plain siblings of the
+    // binary, so the loader needs that directory on its search path.
+    const env = { ...process.env }
+    if (process.platform !== 'win32') {
+      const binDir = path.dirname(bin)
+      env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH ? `${binDir}:${env.LD_LIBRARY_PATH}` : binDir
+    }
+
     await new Promise<void>((resolve, reject) => {
       const proc = spawn(bin, [
         '-m', model,
@@ -145,7 +173,7 @@ export async function transcribeWords(audio: Buffer): Promise<WordTiming[]> {
         '--split-on-word',
         '--language', 'en',
         '--no-prints',
-      ])
+      ], { env })
       let stderr = ''
       proc.stderr.on('data', (d) => { stderr += d.toString() })
       proc.on('error', reject)
