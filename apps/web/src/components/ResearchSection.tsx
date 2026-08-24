@@ -8,9 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import type { ResearchResult } from '@contentengine/shared'
 
-interface RawData {
-  engagement_level: 'high' | 'medium' | 'low'
-  content_angles: string[]
+// raw_data is arbitrary JSON from the research LLM — neither field is
+// guaranteed present, and the call site guards both.
+type RawData = {
+  engagement_level?: 'high' | 'medium' | 'low'
+  content_angles?: string[]
 }
 
 interface Props {

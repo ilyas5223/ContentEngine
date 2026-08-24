@@ -1,0 +1,3 @@
+out/
+vendor/whisper/*
+!vendor/whisper/README.md

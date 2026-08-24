@@ -23,6 +23,12 @@
     },
     "allowJs": true,
     "noEmit": true,
+    // App, not a library — never emits .d.ts. Leaving declaration emit on
+    // (inherited from tsconfig.base.json) makes tsc try to *name* inferred
+    // component types, which fails with TS2742 because apps/video pins
+    // @types/react@19 alongside this app's @types/react@18.
+    "declaration": false,
+    "declarationMap": false,
     "isolatedModules": true
   },
   "include": [

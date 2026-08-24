@@ -4,18 +4,19 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 // Curated fallback list of free models on OpenRouter, ordered roughly by
-// capability. Free model availability changes — refresh from
+// capability. Free model availability changes fast — verified 2026-08-23.
+// Refresh from
 // https://openrouter.ai/api/v1/models (filter id.endsWith(':free')) if these
 // start 404'ing.
 const DEFAULT_MODELS = [
-  'minimax/minimax-m2.5:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'z-ai/glm-5.2:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
-  'qwen/qwen3-next-80b-a3b-instruct:free',
-  'z-ai/glm-4.5-air:free',
-  'openai/gpt-oss-120b:free',
-  'meta-llama/llama-3.3-70b-instruct:free',
-  'nousresearch/hermes-3-llama-3.1-405b:free',
-  'google/gemma-3-27b-it:free',
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-nano-30b-a3b:free',
+  'nvidia/nemotron-nano-9b-v2:free',
 ]
 
 interface OpenRouterResponse {

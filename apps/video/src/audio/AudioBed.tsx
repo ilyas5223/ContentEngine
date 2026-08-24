@@ -1,13 +1,13 @@
 import React from 'react'
 import { Audio, Loop, staticFile, useVideoConfig } from 'remotion'
 import type { WordTiming } from '../shared/schema'
-import { MUSIC_BY_MOOD, SFX, TEMPLATE_MOOD, type Mood } from './manifest'
+import { resolveMusicTrack, SFX, TEMPLATE_MOOD, type Mood } from './manifest'
 
 // Background music + SFX layer. Mounted at the root of every composition.
 //
 // Behaviour:
-//  - Picks one music track based on template→mood mapping. No-op when the
-//    pool for that mood is empty (asset not yet bundled).
+//  - Picks one music track based on template→mood mapping. No-op when no
+//    track for that mood is actually bundled in public/music.
 //  - Loops the track to cover the full timeline.
 //  - Auto-ducks volume during narration via Remotion's function-volume API.
 //    Ducks to MUSIC_DUCK while a word is being spoken (within 0.15s window),
@@ -61,8 +61,7 @@ export const AudioBed: React.FC<AudioBedProps> = ({
 }) => {
   const { fps } = useVideoConfig()
   const resolvedMood: Mood = mood ?? TEMPLATE_MOOD[template]
-  const pool = MUSIC_BY_MOOD[resolvedMood]
-  const track = pool[0]
+  const track = resolveMusicTrack(resolvedMood)
   if (!track) return null
 
   const spans = buildNarrationFrames(captions, fps)

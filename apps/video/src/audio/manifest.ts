@@ -6,6 +6,8 @@
 //
 // File paths are relative to /public, e.g. 'music/upbeat-pulse.mp3'.
 
+import { getStaticFiles } from 'remotion'
+
 export type Mood = 'upbeat' | 'chill' | 'dramatic'
 
 export interface MusicTrack {
@@ -54,4 +56,24 @@ export const TEMPLATE_MOOD: Record<'TopicExplainer' | 'TwitterThread' | 'QuickTi
   TopicExplainer: 'chill',
   TwitterThread: 'upbeat',
   QuickTip: 'upbeat',
+}
+
+// Pick the first track for a mood that is actually present in public/.
+//
+// The pools above are the full curated library, but the .mp3 files are
+// gitignored — a fresh clone has none of them. Referencing a missing file
+// makes Chromium 404 and takes the whole render down, so we intersect the
+// manifest with what the bundle actually shipped. Drop files into
+// public/music/ and they light up automatically; until then, silence.
+export function resolveMusicTrack(mood: Mood): MusicTrack | null {
+  const pool = MUSIC_BY_MOOD[mood]
+  if (!pool.length) return null
+  let available: Set<string>
+  try {
+    available = new Set(getStaticFiles().map((f) => f.name))
+  } catch {
+    // getStaticFiles() is browser-only; be conservative off the main thread.
+    return null
+  }
+  return pool.find((t) => available.has(t.src)) ?? null
 }

@@ -14,6 +14,7 @@ Turborepo + pnpm workspaces:
 |---|---|
 | `apps/web` | Next.js 14 App Router — user-facing dashboard |
 | `apps/api` | Express.js — job dispatch, webhooks, BullMQ producers |
+| `apps/video` | Remotion — 1080×1920 vertical video compositions |
 | `packages/shared` | Shared TypeScript types and utilities |
 
 ## Common Commands
@@ -28,6 +29,10 @@ pnpm type-check   # type-check all apps
 # Per app
 pnpm --filter @contentengine/web dev
 pnpm --filter @contentengine/api dev
+
+# Render a video locally — no Supabase, no Redis, no web app.
+# Needs only OPENROUTER_API_KEY + PEXELS_API_KEY in apps/api/.env
+pnpm --filter @contentengine/api render --topic "why most diets fail" --template QuickTip
 ```
 
 ## Architecture
@@ -61,7 +66,7 @@ pnpm --filter @contentengine/api dev
 Copy `.env.example` → `.env` in each app before running locally.
 
 - `apps/web/.env.example` — needs `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `apps/api/.env.example` — needs all Supabase keys + `ANTHROPIC_API_KEY`, `PEXELS_API_KEY`, `REDIS_URL`
+- `apps/api/.env.example` — needs `OPENROUTER_API_KEY` + `PEXELS_API_KEY` for rendering; Supabase keys and `REDIS_URL` on top of that for the full web app
 
 ## Database
 

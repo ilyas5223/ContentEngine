@@ -4,10 +4,14 @@ import path from 'path'
 import crypto from 'crypto'
 import { spawn } from 'child_process'
 
-// nodejs-whisper word-level transcription. Returns per-word timings used by
-// the Captions Remotion component to render TikTok-style chunks. Always
-// runs — even on known-good scripts — because TTS pacing varies mid-
-// sentence and naive duration-splitting feels off.
+// Word-level transcription via a prebuilt whisper.cpp CLI. Returns per-word
+// timings used by the Captions Remotion component to render TikTok-style
+// chunks. Always runs — even on known-good scripts — because TTS pacing
+// varies mid-sentence and naive duration-splitting feels off.
+//
+// We shell out to a prebuilt binary rather than using nodejs-whisper, which
+// compiles whisper.cpp from source on first use and therefore needs cmake +
+// a C++ toolchain. See vendor/whisper/README.md for the two files to drop in.
 
 export interface WordTiming {
   word: string
@@ -15,7 +19,11 @@ export interface WordTiming {
   end: number
 }
 
-const MODEL = process.env.WHISPER_MODEL ?? 'base.en'
+// || not ?? — an empty WHISPER_MODEL= line in .env is a string, not undefined.
+const MODEL = process.env.WHISPER_MODEL || 'base.en'
+
+// apps/api/src/services → apps/api/vendor/whisper
+const VENDOR_DIR = path.resolve(__dirname, '../../vendor/whisper')
 
 function resolveFfmpeg(): string {
   try {
@@ -25,7 +33,27 @@ function resolveFfmpeg(): string {
   return 'ffmpeg'
 }
 
-// nodejs-whisper / whisper.cpp wants 16kHz mono WAV. Convert MP3 → WAV first.
+function resolveWhisperBin(): string | null {
+  const override = process.env.WHISPER_BIN
+  if (override && fs.existsSync(override)) return override
+  const exe = process.platform === 'win32' ? '.exe' : ''
+  // Upstream renamed the CLI from `main` to `whisper-cli`; release zips in
+  // circulation ship one or the other.
+  for (const name of ['whisper-cli', 'main']) {
+    const candidate = path.join(VENDOR_DIR, name + exe)
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function resolveModelPath(): string | null {
+  const override = process.env.WHISPER_MODEL_PATH
+  if (override && fs.existsSync(override)) return override
+  const candidate = path.join(VENDOR_DIR, `ggml-${MODEL}.bin`)
+  return fs.existsSync(candidate) ? candidate : null
+}
+
+// whisper.cpp wants 16kHz mono WAV. Convert MP3 → WAV first.
 async function mp3ToWav16k(mp3: Buffer, dir: string): Promise<string> {
   const ff = resolveFfmpeg()
   const inPath = path.join(dir, 'in.mp3')
@@ -46,123 +74,99 @@ async function mp3ToWav16k(mp3: Buffer, dir: string): Promise<string> {
   return outPath
 }
 
-// nodejs-whisper writes a sidecar .json (with --output_json + --word_timestamps)
-// formatted as { transcription: [{ from, to, text, words?: [...] }] }.
-// The exact shape varies by version, so we walk both common layouts.
-// Whisper.cpp-style timestamps look like "00:00:01,440" or numeric seconds/ms.
-// Returns seconds, or null if unparseable.
-function toSeconds(v: unknown): number | null {
-  if (typeof v === 'number' && isFinite(v)) {
-    // Heuristic: values >= 1000 are almost certainly milliseconds.
-    return v >= 1000 ? v / 1000 : v
-  }
-  if (typeof v === 'string') {
-    const m = v.match(/^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})$/)
-    if (m) {
-      const [, h, mn, s, ms] = m
-      return Number(h) * 3600 + Number(mn) * 60 + Number(s) + Number(ms.padEnd(3, '0')) / 1000
-    }
-    const n = Number(v)
-    if (!isNaN(n)) return n >= 1000 ? n / 1000 : n
-  }
-  return null
+// "00:00:01,440" → 1.44
+function parseTimestamp(v: unknown): number | null {
+  if (typeof v !== 'string') return null
+  const m = v.match(/^(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})$/)
+  if (!m) return null
+  const [, h, mn, s, ms] = m
+  return Number(h) * 3600 + Number(mn) * 60 + Number(s) + Number(ms.padEnd(3, '0')) / 1000
 }
 
+// whisper.cpp --output-json writes:
+//   { "transcription": [ { "timestamps": {from,to}, "offsets": {from,to}, "text" } ] }
+// With --max-len 1 --split-on-word each entry is a single word. `offsets` are
+// milliseconds — read them as such rather than guessing from magnitude.
 function parseWhisperJson(json: any): WordTiming[] {
+  const segments = Array.isArray(json?.transcription) ? json.transcription : []
   const out: WordTiming[] = []
-  const segments = Array.isArray(json?.transcription)
-    ? json.transcription
-    : Array.isArray(json?.segments)
-    ? json.segments
-    : []
   for (const seg of segments) {
-    const words = seg?.words ?? seg?.word_timestamps
-    if (Array.isArray(words) && words.length) {
-      for (const w of words) {
-        const word = (w.word ?? w.text ?? '').toString().trim()
-        const start = toSeconds(w.start ?? w.from ?? w.offsets?.from)
-        const end = toSeconds(w.end ?? w.to ?? w.offsets?.to)
-        if (word && start !== null && end !== null) out.push({ word, start, end })
-      }
-    } else if (seg?.text || seg?.speech) {
-      const text = String(seg.text ?? seg.speech).trim()
-      const tokens = text.split(/\s+/).filter(Boolean)
-      const start = toSeconds(seg.from ?? seg.start ?? seg.timestamps?.from ?? seg.offsets?.from) ?? 0
-      const end = toSeconds(seg.to ?? seg.end ?? seg.timestamps?.to ?? seg.offsets?.to) ?? start
-      const dur = Math.max(0.1, end - start)
-      const step = dur / Math.max(1, tokens.length)
-      tokens.forEach((tok: string, i: number) => {
-        out.push({ word: tok, start: start + i * step, end: start + (i + 1) * step })
-      })
+    const word = String(seg?.text ?? '').trim()
+    if (!word) continue
+    const fromMs = seg?.offsets?.from
+    const toMs = seg?.offsets?.to
+    if (typeof fromMs === 'number' && typeof toMs === 'number') {
+      out.push({ word, start: fromMs / 1000, end: toMs / 1000 })
+      continue
     }
+    const start = parseTimestamp(seg?.timestamps?.from)
+    const end = parseTimestamp(seg?.timestamps?.to)
+    if (start !== null && end !== null) out.push({ word, start, end })
   }
   return out
 }
 
-// Cache the whisper module + model-download bootstrap once per process.
-let whisperReady: Promise<any> | null = null
-// Once whisper has failed (e.g. cmake not on PATH on Windows), don't keep
-// retrying — every attempt re-downloads the model and re-runs cmake which
-// burns 60+ seconds per job.
+// Once whisper is known missing, stop retrying — every attempt otherwise
+// re-pays the ffmpeg conversion for a call that cannot succeed.
 let whisperUnavailable = false
-function getWhisper(): Promise<any> {
-  if (whisperReady) return whisperReady
-  whisperReady = (async () => {
-    const mod: any = await import('nodejs-whisper' as string)
-    return mod
-  })()
-  return whisperReady
-}
 
 export async function transcribeWords(audio: Buffer): Promise<WordTiming[]> {
   if (process.env.DISABLE_WHISPER === '1') return []
   if (whisperUnavailable) return []
+
+  const bin = resolveWhisperBin()
+  const model = resolveModelPath()
+  if (!bin || !model) {
+    whisperUnavailable = true
+    console.warn(
+      `[captions] whisper disabled — missing ${!bin ? 'binary' : `model ggml-${MODEL}.bin`} ` +
+        `in ${VENDOR_DIR}. See vendor/whisper/README.md.`,
+    )
+    return []
+  }
+
   const id = crypto.randomBytes(6).toString('hex')
   const dir = path.join(os.tmpdir(), `ce_whisper_${id}`)
   fs.mkdirSync(dir, { recursive: true })
 
   try {
     const wavPath = await mp3ToWav16k(audio, dir)
-    const mod = await getWhisper()
-    const nodewhisper = mod.nodewhisper ?? mod.default?.nodewhisper ?? mod.default
+    const outBase = path.join(dir, 'out')
 
-    // First call downloads the model into nodejs-whisper's bundled cache.
-    // Subsequent calls reuse it. autoDownloadModelName triggers the download
-    // if missing without throwing.
-    await nodewhisper(wavPath, {
-      modelName: MODEL,
-      autoDownloadModelName: MODEL,
-      removeWavFileAfterTranscription: false,
-      withCuda: false,
-      whisperOptions: {
-        outputInJson: true,
-        wordTimestamps: true,
-        language: 'en',
-        translateToEnglish: false,
-        timestamps_length: 1,
-        splitOnWord: true,
-      },
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(bin, [
+        '-m', model,
+        '-f', wavPath,
+        '--output-json',
+        '--output-file', outBase,
+        // One word per segment, split on word boundaries — that is what makes
+        // the output word-level rather than phrase-level.
+        '--max-len', '1',
+        '--split-on-word',
+        '--language', 'en',
+        '--no-prints',
+      ])
+      let stderr = ''
+      proc.stderr.on('data', (d) => { stderr += d.toString() })
+      proc.on('error', reject)
+      proc.on('close', (code) =>
+        code === 0 ? resolve() : reject(new Error(`whisper exited ${code}: ${stderr.slice(-500)}`)),
+      )
     })
 
-    // nodejs-whisper writes <wav>.json next to the input.
-    const jsonPath = wavPath + '.json'
+    const jsonPath = `${outBase}.json`
     if (!fs.existsSync(jsonPath)) {
       throw new Error(`whisper output JSON missing: ${jsonPath}`)
     }
     const json = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'))
     const words = parseWhisperJson(json)
     if (words.length === 0) {
-      const segments = Array.isArray(json?.transcription) ? json.transcription : json?.segments
-      console.warn('[captions] parser returned 0 words. sample:', JSON.stringify(segments?.[0] ?? json).slice(0, 400))
+      console.warn(
+        '[captions] parser returned 0 words. sample:',
+        JSON.stringify(json?.transcription?.[0] ?? json).slice(0, 400),
+      )
     }
     return words
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    if (/cmake|build|compile|ENOENT|executable|not found|whisper-cli/i.test(msg)) {
-      whisperUnavailable = true
-      console.warn('[captions] whisper disabled for this process — install cmake to enable')
-    }
-    throw err
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
   }
