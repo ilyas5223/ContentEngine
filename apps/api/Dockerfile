@@ -57,9 +57,11 @@ COPY apps/api ./apps/api
 
 RUN pnpm --filter @contentengine/api build
 
-# Bake Chrome in. chrome-for-testing must match what services/render.ts asks
-# for at runtime, or the container downloads a second browser on first render.
-RUN node -e "require('@remotion/renderer').ensureBrowser({chromeMode:'chrome-for-testing'})"
+# Bake Chrome in. Both setup steps go through pnpm --filter so they run with
+# apps/api as the working directory: in a pnpm workspace the dependencies are
+# under apps/api/node_modules, and a bare `node -e` from /app cannot resolve
+# them.
+RUN pnpm --filter @contentengine/api setup:chrome
 
 # Bake the whisper CLI + caption model in (~160 MB).
 RUN pnpm --filter @contentengine/api setup:whisper

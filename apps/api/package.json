@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "type-check": "tsc --noEmit",
     "render": "tsx src/cli/render.ts",
-    "setup:whisper": "node scripts/setup-whisper.mjs"
+    "setup:whisper": "node scripts/setup-whisper.mjs",
+    "setup:chrome": "node scripts/ensure-browser.mjs"
   },
   "dependencies": {
     "@contentengine/shared": "workspace:*",
