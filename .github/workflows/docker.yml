@@ -1,0 +1,102 @@
+# Builds the API/render image and proves the things baked into it actually
+# work on Linux — Chrome launching under the apt library set, and the whisper
+# CLI the setup script fetched. The dev machine is Windows, so this is where
+# the image is verified.
+name: Docker image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/api/**'
+      - 'apps/video/**'
+      - 'packages/shared/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.base.json'
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+  pull_request:
+    paths:
+      - 'apps/api/**'
+      - 'apps/video/**'
+      - 'packages/shared/**'
+      - 'pnpm-lock.yaml'
+      - '.dockerignore'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Chrome plus a 148 MB model on top of node_modules does not fit
+      # comfortably in the runner's default free space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          tags: contentengine-api:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image size
+        run: docker image ls contentengine-api:ci
+
+      # The real test of the apt library list in the Dockerfile, and of running
+      # Chrome as root. If a shared library is missing this is where it shows.
+      - name: Chrome launches
+        run: |
+          docker run --rm --entrypoint node contentengine-api:ci -e "
+            const { openBrowser } = require('@remotion/renderer');
+            openBrowser('chrome', { chromeMode: 'chrome-for-testing' })
+              .then(async (b) => {
+                await b.close({ silent: true });
+                console.log('CHROME_LAUNCH_OK');
+              })
+              .catch((e) => { console.error(e); process.exit(1); });
+          "
+
+      # Proves setup:whisper pulled the Linux archive at build time and that
+      # the binary runs — i.e. it finds its sibling .so files.
+      - name: Whisper CLI runs
+        run: |
+          docker run --rm --entrypoint bash contentengine-api:ci -c '
+            set -euo pipefail
+            bin=$(find /app/apps/api/vendor/whisper -type f -name whisper-cli | head -1)
+            [ -n "$bin" ] || { echo "no whisper-cli found in image"; exit 1; }
+            echo "binary: $bin"
+            out=$("$bin" --help 2>&1 || true)
+            echo "$out" | head -3
+            echo "$out" | grep -qi usage || { echo "whisper-cli failed to run"; exit 1; }
+            model=/app/apps/api/vendor/whisper/ggml-base.en.bin
+            [ -s "$model" ] || { echo "caption model missing"; exit 1; }
+            echo "model: $(du -h "$model" | cut -f1)"
+            echo WHISPER_OK
+          '
+
+      # The compiled entrypoint and the Remotion sources it bundles at render
+      # time both have to be present; a wrong COPY would only surface here.
+      - name: Render inputs present
+        run: |
+          docker run --rm --entrypoint bash contentengine-api:ci -c '
+            set -euo pipefail
+            test -f /app/apps/api/dist/index.js
+            test -f /app/apps/api/dist/cli/render.js
+            test -f /app/apps/video/src/index.ts
+            echo LAYOUT_OK
+          '
